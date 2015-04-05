@@ -38,7 +38,7 @@ func main() {
 
 func cli() []string {
 	flag.Usage = func() {
-		fmt.Println("Usage: tailf [server:]file [[server:]file]")
+		fmt.Println("Usage: dtail [server:]file [[server:]file]")
 		os.Exit(1)
 	}
 	flag.Parse()
