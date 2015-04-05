@@ -9,24 +9,30 @@ import (
 	"strings"
 )
 
-func main() {
-	// output channel
+var (
+	quit = make(chan error)
 	// child process's stdout/stderr will be send to this channel
-	outch := make(chan string)
+	outch = make(chan string)
+)
 
+func main() {
 	args := cli()
 	for _, arg := range args {
 		t := strings.SplitN(arg, ":", 2)
 		if len(t) == 2 {
-			panicTail(t[0], outch, remoteCmd(t[0], t[1]))
+			panicTail(t[0], remoteCmd(t[0], t[1]))
 		} else {
-			panicTail(t[0], outch, localCmd(t[0]))
+			panicTail(t[0], localCmd(t[0]))
 		}
 	}
 
 	for {
-		msg := <-outch
-		fmt.Print(msg)
+		select {
+		case msg := <-outch:
+			fmt.Print(msg)
+		case <-quit:
+			os.Exit(1)
+		}
 	}
 }
 
@@ -53,13 +59,13 @@ func localCmd(f string) *exec.Cmd {
 	return exec.Command("tail", "-f", f)
 }
 
-func panicTail(tag string, ch chan<- string, cmd *exec.Cmd) {
-	if err := tail(tag, ch, cmd); err != nil {
+func panicTail(tag string, cmd *exec.Cmd) {
+	if err := tail(tag, cmd); err != nil {
 		panic(err)
 	}
 }
 
-func tail(tag string, ch chan<- string, cmd *exec.Cmd) error {
+func tail(tag string, cmd *exec.Cmd) error {
 	if tag != "" {
 		tag = "[" + strings.TrimSpace(tag) + "] "
 	}
@@ -81,8 +87,11 @@ func tail(tag string, ch chan<- string, cmd *exec.Cmd) error {
 	// read from stderr
 	go func() {
 		for {
-			line, _ := buferr.ReadBytes('\n')
-			ch <- tag + string(line)
+			line, err := buferr.ReadBytes('\n')
+			if err != nil {
+				quit <- err
+			}
+			outch <- (tag + string(line))
 		}
 	}()
 
@@ -90,7 +99,10 @@ func tail(tag string, ch chan<- string, cmd *exec.Cmd) error {
 	go func() {
 		for {
 			line, _ := bufout.ReadBytes('\n')
-			ch <- tag + string(line)
+			if err != nil {
+				quit <- err
+			}
+			outch <- (tag + string(line))
 		}
 	}()
 
