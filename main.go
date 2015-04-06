@@ -10,9 +10,11 @@ import (
 )
 
 var (
-	quit = make(chan error)
-	// child process's stdout/stderr will be send to this channel
-	outch = make(chan string)
+	// default error message
+	errmsg = "Error occured. \n"
+	quit   = make(chan string)
+	done   = make(chan string)
+	out    = make(chan string)
 )
 
 func main() {
@@ -28,10 +30,13 @@ func main() {
 
 	for {
 		select {
-		case msg := <-outch:
+		case msg := <-out:
 			fmt.Print(msg)
-		case <-quit:
-			os.Exit(1)
+		case err := <-done:
+			fmt.Print(err)
+			// close all goroutines
+			close(quit)
+			return
 		}
 	}
 }
@@ -84,25 +89,25 @@ func tail(tag string, cmd *exec.Cmd) error {
 
 	bufout, buferr := bufio.NewReader(stdout), bufio.NewReader(stderr)
 
-	// read from stderr
-	go func() {
-		for {
-			line, err := buferr.ReadBytes('\n')
-			if err != nil {
-				quit <- err
-			}
-			outch <- (tag + string(line))
-		}
-	}()
-
 	// read from stdout
 	go func() {
 		for {
-			line, _ := bufout.ReadBytes('\n')
-			if err != nil {
-				quit <- err
+			select {
+			case <-quit:
+				return
+			default:
+				line, err := bufout.ReadBytes('\n')
+				if err != nil {
+					line, err := buferr.ReadBytes('\n')
+					if err != nil {
+						done <- tag + errmsg
+					} else {
+						done <- tag + string(line)
+					}
+					return
+				}
+				out <- tag + string(line)
 			}
-			outch <- (tag + string(line))
 		}
 	}()
 
