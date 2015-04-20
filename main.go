@@ -4,22 +4,25 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 )
 
 var (
-	// default error message
 	errmsg = "Error occured. \n"
-	quit   = make(chan string)
-	done   = make(chan string)
-	out    = make(chan string)
+	quit   = make(chan bool)
+	// command line args & options
+	useTag bool
+	fs     []string
 )
 
+// TODO: flag usage
+
 func main() {
-	args := cli()
-	for _, arg := range args {
+	setup()
+	for _, arg := range fs {
 		t := strings.SplitN(arg, ":", 2)
 		if len(t) == 2 {
 			panicTail(t[0], remoteCmd(t[0], t[1]))
@@ -28,31 +31,22 @@ func main() {
 		}
 	}
 
-	for {
-		select {
-		case msg := <-out:
-			fmt.Print(msg)
-		case err := <-done:
-			fmt.Print(err)
-			// close all goroutines
-			close(quit)
-			return
-		}
-	}
+	<-quit
+	os.Exit(1)
 }
 
-func cli() []string {
+func setup() {
 	flag.Usage = func() {
-		fmt.Println("Usage: dtail [server:]file [[server:]file]")
+		fmt.Printf("dtail [OPTION] [SERVER:]FILE...\n")
+		flag.PrintDefaults()
+	}
+	flag.BoolVar(&useTag, "tag", false, "output with tag")
+	flag.Parse()
+	if flag.NArg() < 1 {
+		fmt.Println("No file is found")
 		os.Exit(1)
 	}
-	flag.Parse()
-
-	if flag.NArg() < 1 {
-		flag.Usage()
-	}
-
-	return flag.Args()
+	fs = flag.Args()
 }
 
 func remoteCmd(s string, f string) *exec.Cmd {
@@ -70,10 +64,16 @@ func panicTail(tag string, cmd *exec.Cmd) {
 	}
 }
 
-func tail(tag string, cmd *exec.Cmd) error {
-	if tag != "" {
-		tag = "[" + strings.TrimSpace(tag) + "] "
+func puts(tag, line string) {
+	if useTag {
+		fmt.Print("[" + tag + "] " + line)
+	} else {
+		fmt.Print(line)
 	}
+}
+
+func tail(tag string, cmd *exec.Cmd) error {
+	tag = strings.TrimSpace(tag)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -89,26 +89,24 @@ func tail(tag string, cmd *exec.Cmd) error {
 
 	bufout, buferr := bufio.NewReader(stdout), bufio.NewReader(stderr)
 
-	// read from stdout
 	go func() {
 		for {
-			select {
-			case <-quit:
-				return
-			default:
-				line, err := bufout.ReadBytes('\n')
-				if err != nil {
-					line, err := buferr.ReadBytes('\n')
-					if err != nil {
-						done <- tag + errmsg
-					} else {
-						done <- tag + string(line)
-					}
-					return
-				}
-				out <- tag + string(line)
+			line, err := bufout.ReadBytes('\n')
+			if err != nil {
+				puts(tag, errmsg)
+				break
 			}
+			puts(tag, string(line))
 		}
+	}()
+
+	go func() {
+		line, err := buferr.ReadBytes('\n')
+		for err != io.EOF {
+			puts(tag, string(line))
+			line, err = buferr.ReadBytes('\n')
+		}
+		quit <- true
 	}()
 
 	return nil
